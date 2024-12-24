@@ -223,7 +223,7 @@ class InvitationSender:
         except Exception as e:
             logging.error(f'Failed to click target button: {e}')
 
-if __name__ == "__main__":
+def main_enroller():
     # Initialize logging
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -236,6 +236,7 @@ if __name__ == "__main__":
         keep_alive_thread.daemon = True
         keep_alive_thread.start()
 
-        # Wait until the target time and then click the button
-        sender.wait_until_target_time()
         sender.click_target_button()
+
+if __name__ == "__main__":
+    main()
