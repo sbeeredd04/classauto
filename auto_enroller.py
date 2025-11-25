@@ -203,9 +203,13 @@ class ASUEnroller:
             if not self._click_term_link():
                 return False
             
+            # Step 6: Navigate back to Shopping Cart (required before enrollment)
+            if not self._navigate_back_to_shopping_cart():
+                return False
+            
             # Log arrival time
             arrival_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
-            logging.info(f"✓ Reached enrollment page at {arrival_time}")
+            logging.info(f"✓ Reached shopping cart page at {arrival_time}")
             
             return True
             
@@ -295,6 +299,37 @@ class ASUEnroller:
                 continue
         
         logging.error("✗ Failed to find Shopping Cart view button with all methods")
+        return False
+    
+    def _navigate_back_to_shopping_cart(self):
+        """Navigate back to Shopping Cart after selecting term."""
+        logging.info("Navigating back to Shopping Cart...")
+        
+        methods = [
+            ("ID 'SCC_LO_FL_WRK_SCC_VIEW_BTN$0'", By.ID, 'SCC_LO_FL_WRK_SCC_VIEW_BTN$0'),
+            ("Full XPath", By.XPATH, '/html/body/form/div[2]/div[4]/div[1]/div/div[2]/div[1]/div/div/div/div/div/div/div[1]/div/ul/li[1]/div[1]'),
+            ("Link text", By.LINK_TEXT, 'Shopping Cart'),
+            ("XPath with ID", By.XPATH, '//a[@id="SCC_LO_FL_WRK_SCC_VIEW_BTN$0"]'),
+            ("Span with Shopping Cart title", By.XPATH, '//span[@title="Shopping Cart"]//a'),
+            ("Any link with SCC_VIEW_BTN", By.XPATH, '//a[contains(@id, "SCC_LO_FL_WRK_SCC_VIEW_BTN")]'),
+        ]
+        
+        for description, by_method, selector in methods:
+            try:
+                logging.info(f"Looking for Shopping Cart link by {description}...")
+                element = WebDriverWait(self.driver, 15).until(
+                    EC.element_to_be_clickable((by_method, selector))
+                )
+                element.click()
+                logging.info(f"✓ Clicked Shopping Cart link using {description}")
+                time.sleep(3)  # Wait for shopping cart to load
+                return True
+                
+            except Exception as e:
+                logging.debug(f"Could not find Shopping Cart link by {description}: {e}")
+                continue
+        
+        logging.error("✗ Failed to navigate back to Shopping Cart")
         return False
     
     def _click_change_term_button(self):
@@ -447,10 +482,12 @@ class ASUEnroller:
             
             enroll_methods = [
                 ("ID 'DERIVED_SSR_FL_SSR_ENROLL_FL'", By.ID, 'DERIVED_SSR_FL_SSR_ENROLL_FL'),
+                ("Full XPath", By.XPATH, '/html/body/form/div[2]/div[4]/div[2]/div/div/div/div/div/div/div[2]/div/div[1]/span/a'),
                 ("XPath with ID", By.XPATH, TARGET_BUTTON_XPATH),
                 ("Link text", By.LINK_TEXT, 'Enroll'),
                 ("Button with role", By.XPATH, '//a[@role="button" and contains(text(), "Enroll")]'),
                 ("Any link containing Enroll", By.XPATH, '//a[contains(@id, "ENROLL") and contains(text(), "Enroll")]'),
+                ("ps-button class", By.CSS_SELECTOR, 'a.ps-button[role="button"]'),
             ]
             
             enroll_clicked = False
@@ -462,8 +499,16 @@ class ASUEnroller:
                     )
                     
                     click_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
-                    enroll_button.click()
-                    logging.info(f"✓ Clicked enrollment button at {click_time} using {description}")
+                    
+                    # Try regular click first
+                    try:
+                        enroll_button.click()
+                        logging.info(f"✓ Clicked enrollment button at {click_time} using {description}")
+                    except:
+                        # If regular click fails, use JavaScript
+                        self.driver.execute_script("arguments[0].click();", enroll_button)
+                        logging.info(f"✓ Clicked enrollment button at {click_time} using {description} (JavaScript)")
+                    
                     enroll_clicked = True
                     break
                     
@@ -511,7 +556,7 @@ class ASUEnroller:
             logging.info("Checking for enrollment confirmation popup...")
             
             # Wait for popup to appear
-            time.sleep(2)
+            time.sleep(3)
             
             yes_methods = [
                 ("ID '#ICYes'", By.ID, '#ICYes'),
@@ -519,22 +564,32 @@ class ASUEnroller:
                 ("Link with onclick", By.XPATH, '//a[@id="#ICYes" and @role="button"]'),
                 ("Any Yes button", By.XPATH, '//a[contains(@id, "ICYes")]'),
                 ("Button with Yes text", By.XPATH, '//a[@role="button" and .//span[text()="Yes"]]'),
+                ("Link containing Yes", By.XPATH, '//a[contains(@onclick, "ICYes")]'),
             ]
             
             yes_clicked = False
             for description, by_method, selector in yes_methods:
                 try:
-                    logging.debug(f"Looking for Yes button by {description}...")
-                    yes_button = WebDriverWait(self.driver, 5).until(
+                    logging.info(f"Looking for Yes button by {description}...")
+                    yes_button = WebDriverWait(self.driver, 10).until(
                         EC.element_to_be_clickable((by_method, selector))
                     )
                     logging.info("⚠ Confirmation popup detected")
-                    yes_button.click()
-                    logging.info(f"✓ Clicked 'Yes' on confirmation popup using {description}")
+                    
+                    # Try regular click first
+                    try:
+                        yes_button.click()
+                        logging.info(f"✓ Clicked 'Yes' on confirmation popup using {description}")
+                    except:
+                        # If regular click fails, use JavaScript
+                        self.driver.execute_script("arguments[0].click();", yes_button)
+                        logging.info(f"✓ Clicked 'Yes' on confirmation popup using {description} (JavaScript)")
+                    
                     yes_clicked = True
                     time.sleep(2)
                     break
-                except Exception:
+                except Exception as e:
+                    logging.debug(f"Could not find Yes button by {description}: {e}")
                     continue
             
             if not yes_clicked:
