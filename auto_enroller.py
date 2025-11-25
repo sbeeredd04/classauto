@@ -315,7 +315,20 @@ class ASUEnroller:
                 )
                 element.click()
                 logging.info(f"✓ Clicked Change Term button using {description}")
-                time.sleep(2)  # Wait for term selection to appear
+                
+                # Wait longer for the term selection modal/page to load
+                logging.info("Waiting for term selection page to load...")
+                time.sleep(5)  # Increased wait time
+                
+                # Try to detect if the modal/page loaded by looking for any term-related elements
+                try:
+                    WebDriverWait(self.driver, 10).until(
+                        EC.presence_of_element_located((By.XPATH, '//table[@class="PSLEVEL1GRID"]'))
+                    )
+                    logging.info("✓ Term selection table detected")
+                except:
+                    logging.warning("Could not detect term selection table, but continuing...")
+                
                 return True
                 
             except Exception as e:
@@ -327,31 +340,110 @@ class ASUEnroller:
     
     def _click_term_link(self):
         """Click the term link to select the specified term."""
+        
+        # First, let's debug what's on the page
+        logging.info("DEBUG: Checking page state after Change Term click...")
+        try:
+            # Print current URL
+            logging.info(f"DEBUG: Current URL: {self.driver.current_url}")
+            
+            # Check if there are any iframes we need to switch to
+            iframes = self.driver.find_elements(By.TAG_NAME, 'iframe')
+            logging.info(f"DEBUG: Found {len(iframes)} iframe(s) on page")
+            
+            # Look for ANY element with "2026" text
+            elements_with_2026 = self.driver.find_elements(By.XPATH, '//*[contains(text(), "2026")]')
+            logging.info(f"DEBUG: Found {len(elements_with_2026)} element(s) containing '2026'")
+            for i, elem in enumerate(elements_with_2026[:3]):  # Show first 3
+                try:
+                    logging.info(f"DEBUG: Element {i+1}: tag={elem.tag_name}, text={elem.text[:50]}, visible={elem.is_displayed()}")
+                except:
+                    pass
+            
+            # Check for table rows
+            table_rows = self.driver.find_elements(By.XPATH, '//tr[@class="ps_grid-row"]')
+            logging.info(f"DEBUG: Found {len(table_rows)} table row(s)")
+            
+        except Exception as e:
+            logging.warning(f"DEBUG: Error during debugging: {e}")
+        
         methods = [
-            ("ID with term", By.ID, TERM_XPATH_ID),
-            ("Link text exact", By.LINK_TEXT, TERM),
-            ("XPath with ID", By.XPATH, f'//a[@id="{TERM_XPATH_ID}"]'),
-            ("XPath with text", By.XPATH, f'//a[contains(text(), "{TERM}")]'),
-            ("Table row click", By.XPATH, f'//tr[.//a[contains(text(), "{TERM}")]]'),
-            ("Any link with 2026 Spring", By.XPATH, '//a[contains(., "2026 Spring") and contains(@class, "ps-link")]'),
+            # Try the CORRECT ID after clicking Change Term
+            ("ID 'SSR_CART_TRM_FL_TERM_DESCR30$0'", By.ID, 'SSR_CART_TRM_FL_TERM_DESCR30$0'),
+            
+            # Try the exact full XPath
+            ("Full XPath", By.XPATH, '/html/body/form/div[2]/div[2]/div/div[2]/div/div/div/div[2]/div/div/table/tbody/tr/td/div/div[1]/span/a'),
+            
+            # Try clicking the table row itself (has onclick handler)
+            ("Table row by ID", By.ID, 'GRID_TERM_SRC5$0_row_0'),
+            
+            # Try the table row with data-role button
+            ("Table row with data-role", By.XPATH, '//tr[@data-role="button" and contains(@onclick, "SSR_CART_TRM_FL_TERM_DESCR30")]'),
+            
+            # Try finding link with both 2026 AND Spring
+            ("Link containing 2026 and Spring", By.XPATH, '//a[contains(text(), "2026") and contains(text(), "Spring") and contains(@id, "TERM_DESCR")]'),
+            
+            # Try within the span wrapper with title="Term"
+            ("Span wrapper with Term title", By.XPATH, '//span[@title="Term"]//a[contains(text(), "2026")]'),
+            
+            # Try the ps-link class within ps_grid-row
+            ("ps-link in grid row", By.XPATH, '//tr[@class="ps_grid-row psc_rowact"]//a[@class="ps-link" and contains(text(), "2026")]'),
+            
+            # Try any link with SSR_CART in the ID
+            ("Link with SSR_CART ID pattern", By.XPATH, '//a[contains(@id, "SSR_CART_TRM_FL_TERM_DESCR")]'),
+            
+            # Try simpler - just any link with 2026
+            ("Any link with 2026", By.XPATH, '//a[contains(text(), "2026")]'),
         ]
         
         for description, by_method, selector in methods:
             try:
-                logging.info(f"Looking for '{TERM}' term link by {description}...")
-                element = WebDriverWait(self.driver, 15).until(
-                    EC.element_to_be_clickable((by_method, selector))
+                logging.info(f"Looking for '2026 Spring' term by {description}...")
+                element = WebDriverWait(self.driver, 5).until(
+                    EC.presence_of_element_located((by_method, selector))
                 )
-                element.click()
-                logging.info(f"✓ Clicked '{TERM}' term link using {description}")
-                time.sleep(3)  # Wait for enrollment page to load
-                return True
+                
+                logging.info(f"DEBUG: Found element: tag={element.tag_name}, text={element.text}, displayed={element.is_displayed()}")
+                
+                # Scroll into view
+                self.driver.execute_script("arguments[0].scrollIntoView(true);", element)
+                time.sleep(1)
+                
+                # Try regular click first
+                try:
+                    WebDriverWait(self.driver, 3).until(EC.element_to_be_clickable((by_method, selector)))
+                    element.click()
+                    logging.info(f"✓ Clicked '2026 Spring' term using {description}")
+                    time.sleep(3)
+                    return True
+                except:
+                    # If regular click fails, try JavaScript click
+                    logging.info(f"Regular click failed, trying JavaScript...")
+                    self.driver.execute_script("arguments[0].click();", element)
+                    logging.info(f"✓ Clicked '2026 Spring' term using {description} (JavaScript)")
+                    time.sleep(3)
+                    return True
                 
             except Exception as e:
-                logging.debug(f"Could not find term link by {description}: {e}")
+                logging.debug(f"Could not find term by {description}: {e}")
                 continue
         
-        logging.error(f"✗ Failed to find '{TERM}' term link with all methods")
+        # Final fallback - try to find ANY link with 2026 and click it with JavaScript
+        try:
+            logging.info("Trying JavaScript click on any 2026 link as last resort...")
+            elements = self.driver.find_elements(By.XPATH, '//a[contains(text(), "2026")]')
+            if elements:
+                for elem in elements:
+                    if "Spring" in elem.text or "spring" in elem.text:
+                        self.driver.execute_script("arguments[0].click();", elem)
+                        logging.info(f"✓ Clicked term using JavaScript fallback: {elem.text}")
+                        time.sleep(3)
+                        return True
+        except Exception as e:
+            logging.debug(f"JavaScript fallback also failed: {e}")
+        
+        logging.error(f"✗ Failed to find '2026 Spring' term with all methods")
+        logging.error("Please check if the term selection page loaded correctly")
         return False
     
     def enroll(self):
