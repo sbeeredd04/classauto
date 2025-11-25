@@ -11,8 +11,8 @@ import datetime
 import pytz  # To handle timezone
 
 # Global variables for credentials, URL, and date/time settings
-USERNAME = ''
-PASSWORD = ''
+USERNAME = 'REDACTED_USERNAME'
+PASSWORD = 'REDACTED_PASSWORD'
 LOGIN_URL = 'https://webapp4.asu.edu/myasu/#!'
 TARGET_BUTTON_XPATH = '//*[@id="DERIVED_SSR_FL_SSR_ENROLL_FL"]'
 WAIT_DATE = '2024-10-31'  # Format: YYYY-MM-DD

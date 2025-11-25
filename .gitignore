@@ -1,0 +1,35 @@
+# Environment variables
+.env
+
+# Logs
+*.log
+
+# Process ID files
+*.pid
+
+# Chrome user data
+userdata/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environment
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
