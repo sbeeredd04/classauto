@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  class-enroller:
+    build: .
+    container_name: asu-class-enroller
+    volumes:
+      - .:/app
+      - ./userdata:/app/userdata
+      - ./debug_screenshots:/app/debug_screenshots
+    environment:
+      - USERNAME=${USERNAME}
+      - PASSWORD=${PASSWORD}
+      - CLASS_NUMBER=${CLASS_NUMBER}
+      - TERM_CODE=${TERM_CODE}
+      - CHECK_INTERVAL=${CHECK_INTERVAL:-30}
+      - MAX_RETRIES=${MAX_RETRIES:-3}
+      - ENROLLMENT_TERM=${ENROLLMENT_TERM}
+    restart: unless-stopped
+    shm_size: '2gb' # Required for Chrome to avoid crashing

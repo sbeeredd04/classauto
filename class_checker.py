@@ -10,6 +10,7 @@ import sys
 import time
 import logging
 import subprocess
+import argparse
 from datetime import datetime
 from selenium import webdriver
 from selenium.webdriver import ChromeOptions
@@ -50,10 +51,14 @@ class ClassAvailabilityChecker:
             options.add_argument('--disable-dev-shm-usage')
             options.add_argument('--disable-gpu')
             options.add_argument('--window-size=1920,1080')
-            options.add_argument('--disable-blink-features=AutomationControlled')
-            options.add_argument('--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36')
+            # Docker/Linux compatibility
+            if os.path.exists("/usr/bin/chromium"):
+                options.binary_location = "/usr/bin/chromium"
+                service = webdriver.ChromeService(executable_path="/usr/bin/chromedriver")
+                self.driver = webdriver.Chrome(service=service, options=options)
+            else:
+                self.driver = webdriver.Chrome(options=options)
             
-            self.driver = webdriver.Chrome(options=options)
             logging.info("✓ Headless ChromeDriver initialized successfully")
             return True
             
@@ -131,12 +136,16 @@ class ClassAvailabilityChecker:
             
             logging.info(f"Launching: python3 {ENROLLER_SCRIPT}")
             
+            # Pass current environment variables to the subprocess
+            env = os.environ.copy()
+            
             # Run the enroller script
             process = subprocess.Popen(
                 ['python3', ENROLLER_SCRIPT],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True
+                text=True,
+                env=env
             )
             
             logging.info(f"✓ Enrollment script launched (PID: {process.pid})")
@@ -200,7 +209,7 @@ class ClassAvailabilityChecker:
                         else:
                             logging.error("✗ Enrollment trigger failed. Will retry checking...")
                             # Reinitialize browser and continue checking
-                            self.driver.quit()
+                            # Note: trigger_enrollment closes the browser, so we need to re-init
                             if not self.init_webdriver():
                                 logging.error("Could not reinitialize browser. Exiting.")
                                 return False
@@ -209,7 +218,11 @@ class ClassAvailabilityChecker:
                         self.retry_count += 1
                         if self.retry_count >= MAX_RETRIES:
                             logging.error(f"Max retries ({MAX_RETRIES}) reached. Restarting browser...")
-                            self.driver.quit()
+                            if self.driver:
+                                try:
+                                    self.driver.quit()
+                                except:
+                                    pass
                             if not self.init_webdriver():
                                 logging.error("Could not reinitialize browser. Exiting.")
                                 return False
@@ -258,6 +271,10 @@ class ClassAvailabilityChecker:
 
 def main():
     """Main entry point."""
+    parser = argparse.ArgumentParser(description='ASU Class Availability Checker')
+    parser.add_argument('--test-trigger', action='store_true', help='Test triggering the enrollment script immediately')
+    args = parser.parse_args()
+    
     # Configure logging
     logging.basicConfig(
         level=logging.INFO,
@@ -268,8 +285,14 @@ def main():
         ]
     )
     
-    # Create and run checker
     checker = ClassAvailabilityChecker()
+    
+    if args.test_trigger:
+        logging.info("TEST MODE: Triggering enrollment script immediately...")
+        checker.trigger_enrollment()
+        sys.exit(0)
+    
+    # Create and run checker
     success = checker.run()
     
     sys.exit(0 if success else 1)
@@ -277,4 +300,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

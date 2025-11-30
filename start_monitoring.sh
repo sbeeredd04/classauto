@@ -1,50 +1,34 @@
 #!/bin/bash
-# Start the class availability monitor
-# This script runs the checker in the background which will
-# automatically trigger the enroller when seats become available
 
-cd "$(dirname "$0")"
+# start_monitoring.sh
+# Usage: ./start_monitoring.sh <CLASS_NUMBER> <TERM_CODE> <ENROLLMENT_TERM>
+# Example: ./start_monitoring.sh 12345 2241 "2024 Spring"
 
-echo "=================================="
-echo "ASU Class Auto-Enrollment System"
-echo "=================================="
-echo ""
-
-# Check if already running
-if [ -f checker.pid ]; then
-    PID=$(cat checker.pid)
-    if ps -p $PID > /dev/null 2>&1; then
-        echo "⚠ Checker is already running (PID: $PID)"
-        echo ""
-        echo "To stop it: ./stop_monitoring.sh"
-        echo "To check status: ./check_status.sh"
-        exit 1
-    else
-        echo "Removing stale PID file..."
-        rm checker.pid
-    fi
+# Check if all arguments are provided
+if [ "$#" -ne 3 ]; then
+    echo "Usage: $0 <CLASS_NUMBER> <TERM_CODE> <ENROLLMENT_TERM>"
+    echo "Example: $0 75255 2261 \"2026 Spring\""
+    exit 1
 fi
 
-# Start the checker in background
-echo "Starting class availability checker..."
-nohup python3 class_checker.py > checker.log 2>&1 &
-PID=$!
+CLASS_NUMBER=$1
+TERM_CODE=$2
+ENROLLMENT_TERM=$3
 
-# Save PID
-echo $PID > checker.pid
+echo "Starting Class Auto-Enroller Monitoring..."
+echo "Class Number: $CLASS_NUMBER"
+echo "Term Code: $TERM_CODE"
+echo "Enrollment Term: $ENROLLMENT_TERM"
 
-echo "✓ Checker started successfully!"
-echo ""
-echo "Process ID: $PID"
-echo "Log file: checker.log"
-echo ""
-echo "The checker is now monitoring class availability."
-echo "When seats become available, it will automatically"
-echo "launch the enrollment script with a visible browser."
-echo ""
-echo "Useful commands:"
-echo "  - View logs: tail -f checker.log"
-echo "  - Check status: ./check_status.sh"
-echo "  - Stop monitoring: ./stop_monitoring.sh"
-echo ""
+# Export variables for docker-compose
+export CLASS_NUMBER
+export TERM_CODE
+export ENROLLMENT_TERM
 
+# Run docker compose in detached mode
+# We use --build to ensure any changes are picked up
+# Note: Using 'docker compose' (v2) provided by Docker Desktop
+docker compose up -d --build
+
+echo "Monitoring started in background."
+echo "View logs with: docker compose logs -f"

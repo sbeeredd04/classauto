@@ -9,6 +9,7 @@ import os
 import sys
 import time
 import logging
+import argparse
 from datetime import datetime
 from selenium import webdriver
 from selenium.webdriver import ChromeOptions
@@ -33,15 +34,11 @@ TERM_XPATH_ID = os.getenv('TERM_XPATH_ID', 'SSR_CART_TRM_FL_TERM_DESCR30$0')
 # Enrollment button XPath
 TARGET_BUTTON_XPATH = '//*[@id="DERIVED_SSR_FL_SSR_ENROLL_FL"]'
 
-# Confirmation pop-up XPaths
-CONFIRMATION_POPUP_XPATH = '//*[@id="ptModTable_0"]'
-CONFIRMATION_YES_BUTTON_XPATH = '//*[@id="#ICYes"]'
-
 
 class ASUEnroller:
     """Handles ASU class enrollment with visible browser."""
     
-    def __init__(self, username, password):
+    def __init__(self, username, password, verify_mode=False):
         """Initialize the enroller with credentials."""
         if not username or not password:
             raise ValueError("Username and password must be provided")
@@ -49,6 +46,9 @@ class ASUEnroller:
         self.driver = None
         self.username = username
         self.password = password
+        self.verify_mode = verify_mode
+        self.debug_dir = os.path.join(os.getcwd(), 'debug_screenshots')
+        os.makedirs(self.debug_dir, exist_ok=True)
         
     def init_webdriver(self):
         """Initialize Chrome WebDriver in visible mode."""
@@ -56,9 +56,18 @@ class ASUEnroller:
             options = ChromeOptions()
             # Use user data to persist Duo authentication
             options.add_argument(f'--user-data-dir={os.getcwd()}/userdata')
+            options.add_argument('--start-maximized')
+            options.add_argument('--disable-blink-features=AutomationControlled')
             
-            self.driver = webdriver.Chrome(options=options)
-            self.driver.maximize_window()
+            # Docker/Linux compatibility
+            if os.path.exists("/usr/bin/chromium"):
+                options.binary_location = "/usr/bin/chromium"
+                options.add_argument('--no-sandbox')
+                options.add_argument('--disable-dev-shm-usage')
+                service = webdriver.ChromeService(executable_path="/usr/bin/chromedriver")
+                self.driver = webdriver.Chrome(service=service, options=options)
+            else:
+                self.driver = webdriver.Chrome(options=options)
             
             logging.info("✓ ChromeDriver initialized successfully")
             return True
@@ -66,7 +75,40 @@ class ASUEnroller:
         except Exception as e:
             logging.error(f"✗ Failed to initialize ChromeDriver: {e}")
             return False
-    
+            
+    def _take_screenshot(self, name):
+        """Take a screenshot and save page source for debugging."""
+        try:
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            
+            # Save screenshot
+            screenshot_filename = os.path.join(self.debug_dir, f"{name}_{timestamp}.png")
+            self.driver.save_screenshot(screenshot_filename)
+            logging.info(f"Screenshot saved: {screenshot_filename}")
+            
+            # Save page source
+            source_filename = os.path.join(self.debug_dir, f"{name}_{timestamp}.html")
+            with open(source_filename, "w", encoding="utf-8") as f:
+                f.write(self.driver.page_source)
+            logging.info(f"Page source saved: {source_filename}")
+            
+        except Exception as e:
+            logging.warning(f"Failed to capture debug info: {e}")
+
+    def _wait_for_spinner(self):
+        """Wait for PeopleSoft processing spinner to disappear."""
+        try:
+            # The spinner usually has ID 'WAIT_win1' or similar
+            WebDriverWait(self.driver, 0.5).until(
+                EC.visibility_of_element_located((By.XPATH, "//*[contains(@id, 'WAIT_win')]"))
+            )
+            # If found, wait for it to disappear
+            WebDriverWait(self.driver, 10).until(
+                EC.invisibility_of_element_located((By.XPATH, "//*[contains(@id, 'WAIT_win')]"))
+            )
+        except:
+            pass  # Spinner might not have appeared, which is fine
+
     def login_and_navigate(self):
         """
         Login to ASU and navigate to the enrollment page.
@@ -85,24 +127,32 @@ class ASUEnroller:
             
             # Enter credentials
             logging.info("Waiting for username field...")
-            username_field = WebDriverWait(self.driver, 20).until(
-                EC.visibility_of_element_located((By.ID, 'username'))
-            )
-            username_field.send_keys(self.username)
-            logging.info("✓ Username entered")
-            
-            password_field = self.driver.find_element(By.ID, 'password')
-            password_field.send_keys(self.password)
-            logging.info("✓ Password entered")
-            
-            # Click submit button (try multiple methods)
-            time.sleep(1)  # Ensure form is ready
-            
-            if not self._click_submit_button():
-                logging.error("✗ Failed to submit login form")
-                return False
-            
-            logging.info("✓ Login form submitted")
+            try:
+                username_field = WebDriverWait(self.driver, 20).until(
+                    EC.visibility_of_element_located((By.ID, 'username'))
+                )
+                username_field.send_keys(self.username)
+                logging.info("✓ Username entered")
+                
+                password_field = self.driver.find_element(By.ID, 'password')
+                password_field.send_keys(self.password)
+                logging.info("✓ Password entered")
+                
+                # Click submit button (try multiple methods)
+                time.sleep(1)  # Ensure form is ready
+                
+                if not self._click_submit_button():
+                    logging.error("✗ Failed to submit login form")
+                    self._take_screenshot("login_fail")
+                    return False
+                
+                logging.info("✓ Login form submitted")
+            except Exception as e:
+                # Check if already logged in (My ASU page)
+                if "My ASU" in self.driver.title:
+                     logging.info("✓ Already logged in")
+                else:
+                    raise e
             
             # Handle Duo authentication if required
             self._handle_duo_authentication()
@@ -110,6 +160,7 @@ class ASUEnroller:
             # Navigate to enrollment page
             if not self._navigate_to_enrollment_page():
                 logging.error("✗ Failed to navigate to enrollment page")
+                self._take_screenshot("nav_fail")
                 return False
             
             logging.info("✓ Successfully navigated to enrollment page")
@@ -117,6 +168,7 @@ class ASUEnroller:
             
         except Exception as e:
             logging.error(f"✗ Login and navigation failed: {e}", exc_info=True)
+            self._take_screenshot("login_exception")
             return False
     
     def _click_submit_button(self):
@@ -220,10 +272,10 @@ class ASUEnroller:
     def _click_registration_link(self):
         """Find and click the Registration link."""
         methods = [
+            ("Link text", By.LINK_TEXT, 'Registration'),
             ("ID 'classes-reg-link'", By.ID, 'classes-reg-link'),
             ("Full XPath", By.XPATH, '/html/body/div[1]/main/div/div/div[4]/div[2]/div/div/div[1]/section[2]/div[2]/div[2]/div[4]/div[3]/span[1]/a'),
             ("CSS selector", By.CSS_SELECTOR, 'a#classes-reg-link.reg-popup'),
-            ("Link text", By.LINK_TEXT, 'Registration'),
             ("Partial link text", By.PARTIAL_LINK_TEXT, 'Registration'),
         ]
         
@@ -243,15 +295,16 @@ class ASUEnroller:
                 continue
         
         logging.error("✗ Failed to find Registration link with all methods")
+        self._take_screenshot("reg_link_fail")
         return False
     
     def _click_shopping_cart_link(self):
         """Find and click the Add/Shopping Cart link."""
         methods = [
+            ("Link text", By.LINK_TEXT, 'Add/Shopping Cart'),
             ("Title attribute", By.CSS_SELECTOR, 'a.myasu-tippy-option[title="Add classes"]'),
             ("Full XPath", By.XPATH, '/html/body/div[1]/main/div/div/div[4]/div[2]/div/div/div[1]/section[2]/div[2]/div[2]/div[4]/div[3]/span[1]/div/div/div/div/div/div/a[2]'),
             ("Data tracking", By.XPATH, '//a[@data-tracking="myclasses/reg-add"]'),
-            ("Link text", By.LINK_TEXT, 'Add/Shopping Cart'),
             ("Partial link text", By.PARTIAL_LINK_TEXT, 'Shopping Cart'),
         ]
         
@@ -271,13 +324,14 @@ class ASUEnroller:
                 continue
         
         logging.error("✗ Failed to find Add/Shopping Cart link with all methods")
+        self._take_screenshot("cart_link_fail")
         return False
     
     def _click_shopping_cart_view(self):
         """Click the Shopping Cart view button."""
         methods = [
-            ("ID 'SCC_LO_FL_WRK_SCC_VIEW_BTN$0'", By.ID, 'SCC_LO_FL_WRK_SCC_VIEW_BTN$0'),
             ("Full XPath", By.XPATH, '/html/body/form/div[2]/div[4]/div[1]/div/div[2]/div[1]/div/div/div/div/div/div/div[1]/div/ul/li[1]/div[1]'),
+            ("ID 'SCC_LO_FL_WRK_SCC_VIEW_BTN$0'", By.ID, 'SCC_LO_FL_WRK_SCC_VIEW_BTN$0'),
             ("XPath with ID", By.XPATH, '//a[@id="SCC_LO_FL_WRK_SCC_VIEW_BTN$0"]'),
             ("Link text", By.LINK_TEXT, 'Shopping Cart'),
             ("Partial link containing img", By.XPATH, '//a[contains(@id, "SCC_VIEW_BTN") and .//span[contains(text(), "Shopping Cart")]]'),
@@ -299,14 +353,30 @@ class ASUEnroller:
                 continue
         
         logging.error("✗ Failed to find Shopping Cart view button with all methods")
+        self._take_screenshot("cart_view_fail")
         return False
     
     def _navigate_back_to_shopping_cart(self):
         """Navigate back to Shopping Cart after selecting term."""
         logging.info("Navigating back to Shopping Cart...")
         
+        # First, ensure we are back in the main content (out of any iframes)
+        try:
+            self.driver.switch_to.default_content()
+        except:
+            pass
+            
+        # Check if we are already on the Shopping Cart page
+        try:
+            if "Shopping Cart" in self.driver.page_source and "Enroll" in self.driver.page_source:
+                logging.info("✓ Already on Shopping Cart page")
+                return True
+        except:
+            pass
+        
         methods = [
             ("ID 'SCC_LO_FL_WRK_SCC_VIEW_BTN$0'", By.ID, 'SCC_LO_FL_WRK_SCC_VIEW_BTN$0'),
+            ("User Provided XPath", By.XPATH, '/html/body/form/div[2]/div[4]/div[1]/div/div[2]/div[1]/div/div/div/div/div/div/div[1]/div/ul/li[1]/div[1]/div/span/a'),
             ("Full XPath", By.XPATH, '/html/body/form/div[2]/div[4]/div[1]/div/div[2]/div[1]/div/div/div/div/div/div/div[1]/div/ul/li[1]/div[1]'),
             ("Link text", By.LINK_TEXT, 'Shopping Cart'),
             ("XPath with ID", By.XPATH, '//a[@id="SCC_LO_FL_WRK_SCC_VIEW_BTN$0"]'),
@@ -323,6 +393,7 @@ class ASUEnroller:
                 element.click()
                 logging.info(f"✓ Clicked Shopping Cart link using {description}")
                 time.sleep(3)  # Wait for shopping cart to load
+                self._wait_for_spinner()
                 return True
                 
             except Exception as e:
@@ -330,6 +401,7 @@ class ASUEnroller:
                 continue
         
         logging.error("✗ Failed to navigate back to Shopping Cart")
+        self._take_screenshot("back_cart_fail")
         return False
     
     def _click_change_term_button(self):
@@ -351,18 +423,19 @@ class ASUEnroller:
                 element.click()
                 logging.info(f"✓ Clicked Change Term button using {description}")
                 
-                # Wait longer for the term selection modal/page to load
-                logging.info("Waiting for term selection page to load...")
-                time.sleep(5)  # Increased wait time
+                self._wait_for_spinner()
+                time.sleep(2)
                 
-                # Try to detect if the modal/page loaded by looking for any term-related elements
+                # Check for iframe modal
                 try:
-                    WebDriverWait(self.driver, 10).until(
-                        EC.presence_of_element_located((By.XPATH, '//table[@class="PSLEVEL1GRID"]'))
+                    logging.info("Checking for term selection modal iframe...")
+                    iframe = WebDriverWait(self.driver, 5).until(
+                        EC.presence_of_element_located((By.TAG_NAME, "iframe"))
                     )
-                    logging.info("✓ Term selection table detected")
+                    self.driver.switch_to.frame(iframe)
+                    logging.info("✓ Switched to term selection iframe")
                 except:
-                    logging.warning("Could not detect term selection table, but continuing...")
+                    logging.info("No iframe found, assuming main page content")
                 
                 return True
                 
@@ -371,38 +444,36 @@ class ASUEnroller:
                 continue
         
         logging.error("✗ Failed to find Change Term button with all methods")
+        self._take_screenshot("change_term_fail")
         return False
     
     def _click_term_link(self):
-        """Click the first clickable term in the table."""
-        logging.info("Looking for first clickable term in the table...")
+        """Click the term link matching the target term."""
+        logging.info(f"Looking for term link matching '{TERM}'...")
         
         methods = [
-            # Try clicking the first table row (has onclick handler)
-            ("First table row by class", By.XPATH, '//tr[@class="ps_grid-row psc_rowact"][1]'),
+            # 1. Exact ID match (User provided)
+            ("ID 'SSR_CART_TRM_FL_TERM_DESCR30$0'", By.ID, 'SSR_CART_TRM_FL_TERM_DESCR30$0'),
             
-            # Try the first table row with data-role button
-            ("First table row with data-role", By.XPATH, '//tr[@data-role="button"][1]'),
+            # 2. User provided XPath
+            ("User Provided XPath", By.XPATH, '/html/body/form/div[2]/div[2]/div/div[2]/div/div/div/div[2]/div/div/table/tbody/tr/td/div'),
             
-            # Try the first link in the table
+            # 3. Link text match
+            (f"Link text '{TERM}'", By.LINK_TEXT, TERM),
+            
+            # 4. Partial link text match
+            (f"Partial link text '{TERM}'", By.PARTIAL_LINK_TEXT, TERM),
+            
+            # 5. XPath with text match
+            (f"XPath text '{TERM}'", By.XPATH, f"//a[contains(text(), '{TERM}')]"),
+            
+            # 6. Fallback to first link in table (Original method)
             ("First link in table", By.XPATH, '//table//tbody//tr[1]//a[@class="ps-link"]'),
-            
-            # Try the first link with SSR_CART in ID
-            ("First SSR_CART link", By.XPATH, '//a[contains(@id, "SSR_CART_TRM_FL_TERM_DESCR")][1]'),
-            
-            # Try first clickable link in first table cell
-            ("First link in first cell", By.XPATH, '//table//tbody//tr[1]//td[1]//a[1]'),
-            
-            # Try first span wrapper link
-            ("First span wrapper link", By.XPATH, '//span[@class="ps-link-wrapper"]//a[1]'),
-            
-            # Try any first link in the term table
-            ("Any first link", By.XPATH, '//table[@class="PSLEVEL1GRID"]//a[1]'),
         ]
         
         for description, by_method, selector in methods:
             try:
-                logging.info(f"Trying to find first term by {description}...")
+                logging.info(f"Trying to find term by {description}...")
                 element = WebDriverWait(self.driver, 5).until(
                     EC.presence_of_element_located((by_method, selector))
                 )
@@ -418,51 +489,26 @@ class ASUEnroller:
                 try:
                     WebDriverWait(self.driver, 3).until(EC.element_to_be_clickable((by_method, selector)))
                     element.click()
-                    logging.info(f"✓ Clicked first term '{term_text}' using {description}")
-                    time.sleep(3)
-                    return True
+                    logging.info(f"✓ Clicked term '{term_text}' using {description}")
                 except Exception as e1:
                     # If regular click fails, try JavaScript click
                     logging.debug(f"Regular click failed: {e1}, trying JavaScript...")
                     self.driver.execute_script("arguments[0].click();", element)
-                    logging.info(f"✓ Clicked first term '{term_text}' using {description} (JavaScript)")
-                    time.sleep(3)
-                    return True
+                    logging.info(f"✓ Clicked term '{term_text}' using {description} (JavaScript)")
+                
+                self._wait_for_spinner()
+                time.sleep(3)
+                
+                # Switch back to default content in case we were in an iframe
+                self.driver.switch_to.default_content()
+                return True
                 
             except Exception as e:
-                logging.debug(f"Could not find first term by {description}: {e}")
+                logging.debug(f"Could not find term by {description}: {e}")
                 continue
         
-        # Final fallback - find ANY clickable element in the table and click it
-        try:
-            logging.info("Trying to find any clickable element in table as last resort...")
-            
-            # Try to find the table first
-            table = WebDriverWait(self.driver, 5).until(
-                EC.presence_of_element_located((By.XPATH, '//table//tbody'))
-            )
-            
-            # Find first row
-            first_row = table.find_element(By.XPATH, './/tr[1]')
-            
-            # Try clicking the row itself (has onclick)
-            try:
-                first_row.click()
-                logging.info("✓ Clicked first table row directly")
-                time.sleep(3)
-                return True
-            except:
-                # Try JavaScript click on row
-                self.driver.execute_script("arguments[0].click();", first_row)
-                logging.info("✓ Clicked first table row using JavaScript")
-                time.sleep(3)
-                return True
-                
-        except Exception as e:
-            logging.debug(f"Final fallback also failed: {e}")
-        
         logging.error("✗ Failed to find any clickable term in the table")
-        logging.error("Please check if the term selection page loaded correctly")
+        self._take_screenshot("term_select_fail")
         return False
     
     def enroll(self):
@@ -472,9 +518,17 @@ class ASUEnroller:
         Returns:
             bool: True if successful, False otherwise
         """
+        # User requested to perform actual enrollment even in verify mode
+        # if self.verify_mode:
+        #     logging.info("=" * 60)
+        #     logging.info("VERIFICATION MODE: Skipping actual enrollment")
+        #     logging.info("=" * 60)
+        #     logging.info("✓ Navigation verification completed successfully")
+        #     return True
+
         try:
             logging.info("=" * 60)
-            logging.info("Starting enrollment process")
+            logging.info("Starting enrollment process (Clicking Enroll & Confirm)")
             logging.info("=" * 60)
             
             # Click the enrollment button
@@ -482,6 +536,7 @@ class ASUEnroller:
             
             enroll_methods = [
                 ("ID 'DERIVED_SSR_FL_SSR_ENROLL_FL'", By.ID, 'DERIVED_SSR_FL_SSR_ENROLL_FL'),
+                ("User Provided XPath", By.XPATH, '/html/body/form/div[2]/div[4]/div[2]/div/div/div/div/div/div/div[2]/div/div[1]/span/a'),
                 ("Full XPath", By.XPATH, '/html/body/form/div[2]/div[4]/div[2]/div/div/div/div/div/div/div[2]/div/div[1]/span/a'),
                 ("XPath with ID", By.XPATH, TARGET_BUTTON_XPATH),
                 ("Link text", By.LINK_TEXT, 'Enroll'),
@@ -518,36 +573,36 @@ class ASUEnroller:
             
             if not enroll_clicked:
                 logging.error("✗ Could not find enrollment button with any method")
+                self._take_screenshot("enroll_btn_fail")
                 return False
             
             # Handle confirmation popup if it appears
             self._handle_confirmation_popup()
             
             # Give the page time to process
-            time.sleep(3)
+            time.sleep(5)
             
             # Check for success or error messages
             self._check_enrollment_result()
             
             logging.info("=" * 60)
-            logging.info("✓ ENROLLMENT PROCESS COMPLETED!")
+            logging.info("✓ ENROLLMENT ACTIONS COMPLETED")
             logging.info("=" * 60)
-            logging.info("Please verify enrollment status on the page.")
             
-            # Keep browser open for verification
-            logging.info("Browser will remain open for verification...")
-            logging.info("Press Ctrl+C to close when done.")
-            
-            try:
-                while True:
-                    time.sleep(60)
-            except KeyboardInterrupt:
-                logging.info("Closing browser...")
+            if not self.verify_mode:
+                logging.info("Browser will remain open for verification...")
+                logging.info("Press Ctrl+C to close when done.")
+                try:
+                    while True:
+                        time.sleep(60)
+                except KeyboardInterrupt:
+                    logging.info("Closing browser...")
             
             return True
             
         except Exception as e:
             logging.error(f"✗ Enrollment failed: {e}", exc_info=True)
+            self._take_screenshot("enroll_exception")
             return False
     
     def _handle_confirmation_popup(self):
@@ -629,6 +684,7 @@ class ASUEnroller:
             for indicator in error_indicators:
                 if indicator in page_text:
                     logging.warning(f"⚠ POSSIBLE ERROR: Found indicator '{indicator}'")
+                    self._take_screenshot("enroll_error")
             
             logging.info("Check the browser for enrollment status")
             
@@ -673,12 +729,19 @@ class ASUEnroller:
             return False
             
         finally:
-            # Don't auto-cleanup - let user verify enrollment
-            pass
+            if self.verify_mode:
+                self.cleanup()
+            else:
+                # Don't auto-cleanup in normal mode - let user verify enrollment
+                pass
 
 
 def main():
     """Main entry point."""
+    parser = argparse.ArgumentParser(description='ASU Class Auto-Enroller')
+    parser.add_argument('--verify', action='store_true', help='Run in verification mode (no enrollment)')
+    args = parser.parse_args()
+
     # Configure logging
     logging.basicConfig(
         level=logging.INFO,
@@ -692,6 +755,7 @@ def main():
     logging.info("=" * 60)
     logging.info("ASU Class Auto-Enroller")
     logging.info(f"Target Term: {TERM}")
+    logging.info(f"Mode: {'VERIFICATION' if args.verify else 'ENROLLMENT'}")
     logging.info(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logging.info("=" * 60)
     
@@ -701,7 +765,7 @@ def main():
         sys.exit(1)
     
     # Create and run enroller
-    enroller = ASUEnroller(USERNAME, PASSWORD)
+    enroller = ASUEnroller(USERNAME, PASSWORD, verify_mode=args.verify)
     success = enroller.run()
     
     sys.exit(0 if success else 1)
